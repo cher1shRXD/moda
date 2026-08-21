@@ -1,0 +1,31 @@
+.DS_Store
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+ios/Config/ModaSecrets.xcconfig
+*.pem
+*.p8
+*.mobileprovision
+
+# Server runtime
+server/data/
+server/node_modules/
+
+# App archives
+*.ipa
+*.xcarchive
