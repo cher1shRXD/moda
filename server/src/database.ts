@@ -151,34 +151,40 @@ export class ModaDatabase {
 
   recalculateDailyBudgetBaseline(): DailyBudgetRecord {
     const balance = this.getBalance();
-    const spendableBalance = Math.max(balance.currentBalance - balance.minimumBalance, 0);
-    const activeGoalTargetAmount = this.listGoals()
-      .reduce((total, goal) => total + goal.targetAmount, 0);
-    const unallocatedBalance = Math.max(spendableBalance - activeGoalTargetAmount, 0);
+    const unallocatedBalance = this.availableBudgetAmount(balance);
     const todayNetSpending = netSpending(this.listTransactions(todayRangeKst()));
 
     return this.updateDailyBudget({
-      initialAllowance: Math.max(unallocatedBalance + todayNetSpending, 0)
+      initialAllowance: Math.max(unallocatedBalance + Math.max(todayNetSpending, 0), 0)
     });
   }
 
   getDailyBudgetSnapshot(): DailyBudgetSnapshot {
     const budget = this.getDailyBudget();
-    const currentAllowance = Math.max(budget.initialAllowance + budget.adjustment, 0);
+    const balance = this.getBalance();
     const spentAmount = netSpending(this.listTransactions(todayRangeKst()));
-    const remainingAmount = currentAllowance - spentAmount;
+    const normalizedSpentAmount = Math.max(spentAmount, 0);
+    const availableAmount = Math.max(this.availableBudgetAmount(balance) + budget.adjustment, 0);
+    const currentAllowance = Math.max(availableAmount + normalizedSpentAmount, 0);
     const usagePercent = currentAllowance > 0
-      ? Math.min(100, Math.max(0, Math.round((spentAmount / currentAllowance) * 100)))
+      ? Math.min(100, Math.max(0, Math.round((normalizedSpentAmount / currentAllowance) * 100)))
       : 100;
 
     return {
       ...budget,
       currentAllowance,
-      spentAmount,
-      availableAmount: Math.max(remainingAmount, 0),
-      overspentAmount: Math.max(-remainingAmount, 0),
+      spentAmount: normalizedSpentAmount,
+      availableAmount,
+      overspentAmount: Math.max(normalizedSpentAmount - currentAllowance, 0),
       usagePercent
     };
+  }
+
+  private availableBudgetAmount(balance: BalanceRecord): number {
+    const activeGoalTargetAmount = this.listGoals()
+      .reduce((total, goal) => total + goal.targetAmount, 0);
+
+    return Math.max(balance.currentBalance - balance.minimumBalance - activeGoalTargetAmount, 0);
   }
 
   listGoals(options: { includeArchived?: boolean } = {}): GoalRecord[] {
