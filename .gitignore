@@ -25,6 +25,7 @@ ios/Config/ModaSecrets.xcconfig
 # Server runtime
 server/data/
 server/node_modules/
+server/dist/
 
 # App archives
 *.ipa
