@@ -34,6 +34,7 @@ type NotificationPayload = {
 };
 
 const LAST_AVAILABLE_AMOUNT_KEY = "budget:last_available_amount";
+const LAST_CHANGE_AT_KEY = "budget:last_change_at";
 const DAILY_SUMMARY_SENT_DATE_KEY = "budget:daily_summary_sent_date";
 
 export class BudgetNotificationService {
@@ -46,9 +47,12 @@ export class BudgetNotificationService {
     const current = this.snapshot();
     const previousText = this.database.getNotificationState(LAST_AVAILABLE_AMOUNT_KEY);
     const previousAvailableAmount = previousText === undefined ? undefined : Number(previousText);
+    const previousChangeAt = this.database.getNotificationState(LAST_CHANGE_AT_KEY);
+    const latestChangeAt = this.latestTransactionChangeAt() ?? new Date().toISOString();
 
     if (previousAvailableAmount === undefined || previousAvailableAmount === current.availableAmount) {
       this.database.setNotificationState(LAST_AVAILABLE_AMOUNT_KEY, String(current.availableAmount));
+      this.database.setNotificationState(LAST_CHANGE_AT_KEY, latestChangeAt);
       return {
         changed: false,
         previousAvailableAmount,
@@ -59,14 +63,18 @@ export class BudgetNotificationService {
       };
     }
 
+    const recentSpending = this.recentSpending(previousChangeAt, latestChangeAt, previousAvailableAmount, current);
     const payload = {
-      title: "오늘 예산이 바뀌었어요",
-      body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+      title: `지난 ${recentSpending.minutes}분간 ${won(recentSpending.amount)}을 사용했어요.`,
+      body: `오늘 예산이 이제 ${won(current.availableAmount)} 남았어요.`,
       data: {
+        kind: "budget_changed",
+        minutes: recentSpending.minutes,
+        spentAmount: recentSpending.amount,
         availableAmount: current.availableAmount,
         overspentAmount: current.overspentAmount,
         currentAllowance: current.currentAllowance,
-        spentAmount: current.spentAmount,
+        totalSpentAmount: current.spentAmount,
         usagePercent: current.usagePercent
       }
     };
@@ -75,6 +83,7 @@ export class BudgetNotificationService {
       this.database.listDeviceTokens().map((token) => this.apnsClient.send(token, payload))
     );
     this.database.setNotificationState(LAST_AVAILABLE_AMOUNT_KEY, String(current.availableAmount));
+    this.database.setNotificationState(LAST_CHANGE_AT_KEY, latestChangeAt);
 
     return {
       changed: true,
@@ -110,8 +119,8 @@ export class BudgetNotificationService {
     }
 
     const payload = {
-      title: "오늘 사용할 수 있는 돈",
-      body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+      title: "오늘 사용 가능한 예산을 계산 했어요",
+      body: `오늘 예산은 총 ${won(current.currentAllowance)}이에요. 현재 ${current.usagePercent}% 사용했어요.`,
       data: {
         kind: "daily_budget_summary",
         date,
@@ -129,6 +138,7 @@ export class BudgetNotificationService {
 
     this.database.setNotificationState(DAILY_SUMMARY_SENT_DATE_KEY, date);
     this.database.setNotificationState(LAST_AVAILABLE_AMOUNT_KEY, String(current.availableAmount));
+    this.database.setNotificationState(LAST_CHANGE_AT_KEY, this.latestTransactionChangeAt() ?? new Date().toISOString());
 
     return {
       alreadySent: false,
@@ -154,22 +164,27 @@ export class BudgetNotificationService {
   }> {
     const current = this.snapshot();
     const tokenCount = this.database.listDeviceTokens().length;
+    const latestChangeAt = this.latestTransactionChangeAt() ?? new Date().toISOString();
+    const previousChangeAt = this.database.getNotificationState(LAST_CHANGE_AT_KEY);
+    const recentSpending = this.recentSpending(previousChangeAt, latestChangeAt, undefined, current);
     const payload: NotificationPayload = kind === "budgetChanged"
       ? {
-          title: "오늘 예산이 바뀌었어요",
-          body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+          title: `지난 ${recentSpending.minutes}분간 ${won(recentSpending.amount)}을 사용했어요.`,
+          body: `오늘 예산이 이제 ${won(current.availableAmount)} 남았어요.`,
           data: {
             kind: "budget_changed_test",
+            minutes: recentSpending.minutes,
+            spentAmount: recentSpending.amount,
             availableAmount: current.availableAmount,
             overspentAmount: current.overspentAmount,
             currentAllowance: current.currentAllowance,
-            spentAmount: current.spentAmount,
+            totalSpentAmount: current.spentAmount,
             usagePercent: current.usagePercent
           }
         }
       : {
-          title: "오늘 사용할 수 있는 돈",
-          body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+          title: "오늘 사용 가능한 예산을 계산 했어요",
+          body: `오늘 예산은 총 ${won(current.currentAllowance)}이에요. 현재 ${current.usagePercent}% 사용했어요.`,
           data: {
             kind: "daily_budget_summary_test",
             date: kstDateKey(new Date()),
@@ -215,6 +230,44 @@ export class BudgetNotificationService {
       from: start.toISOString(),
       to: end.toISOString()
     });
+  }
+
+  private latestTransactionChangeAt(): string | undefined {
+    return this.todayTransactions()
+      .map((transaction) => transaction.updatedAt || transaction.createdAt)
+      .sort()
+      .at(-1);
+  }
+
+  private recentSpending(
+    previousChangeAt: string | undefined,
+    latestChangeAt: string,
+    previousAvailableAmount: number | undefined,
+    current: BudgetSnapshot
+  ): { minutes: number; amount: number } {
+    const latestTime = Date.parse(latestChangeAt);
+    const previousTime = previousChangeAt ? Date.parse(previousChangeAt) : latestTime;
+    const validPreviousTime = Number.isFinite(previousTime) ? previousTime : latestTime;
+    const validLatestTime = Number.isFinite(latestTime) ? latestTime : validPreviousTime;
+    const minutes = Math.max(1, Math.ceil((validLatestTime - validPreviousTime) / 60_000));
+    const amount = this.todayTransactions()
+      .filter((transaction) => {
+        const changedAt = Date.parse(transaction.updatedAt || transaction.createdAt);
+        return transaction.kind === "expense" &&
+          Number.isFinite(changedAt) &&
+          changedAt > validPreviousTime &&
+          changedAt <= validLatestTime;
+      })
+      .reduce((total, transaction) => total + transaction.amount, 0);
+
+    if (amount > 0) {
+      return { minutes, amount };
+    }
+
+    const fallbackAmount = previousAvailableAmount === undefined
+      ? 0
+      : Math.max(previousAvailableAmount - current.availableAmount, 0);
+    return { minutes, amount: fallbackAmount };
   }
 
   private async sendToAll(payload: NotificationPayload): Promise<NotificationSendSummary> {
