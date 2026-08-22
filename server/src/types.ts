@@ -43,6 +43,14 @@ export type DailyBudgetRecord = {
   updatedAt: string;
 };
 
+export type DailyBudgetSnapshot = DailyBudgetRecord & {
+  currentAllowance: number;
+  spentAmount: number;
+  availableAmount: number;
+  overspentAmount: number;
+  usagePercent: number;
+};
+
 export type NotificationStateRecord = {
   key: string;
   value: string | null;
@@ -51,7 +59,7 @@ export type NotificationStateRecord = {
 
 export type AtomicSnapshot = {
   balance: BalanceRecord;
-  today: DailyBudgetRecord;
+  today: DailyBudgetSnapshot;
   goals: GoalRecord[];
   transactions: TransactionRecord[];
 };

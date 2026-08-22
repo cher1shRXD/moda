@@ -1,19 +1,11 @@
 import type { ApnsClient } from "./apns.js";
 import type { ModaDatabase } from "./database.js";
-import type { TransactionRecord } from "./types.js";
-
-type BudgetSnapshot = {
-  currentAllowance: number;
-  spentAmount: number;
-  availableAmount: number;
-  overspentAmount: number;
-  usagePercent: number;
-};
+import type { DailyBudgetSnapshot, TransactionRecord } from "./types.js";
 
 type NotificationCheckResult = {
   changed: boolean;
   previousAvailableAmount?: number;
-  current: BudgetSnapshot;
+  current: DailyBudgetSnapshot;
   sent: number;
   skipped: number;
   failures: Array<{ token: string; reason?: string; status?: number }>;
@@ -159,7 +151,7 @@ export class BudgetNotificationService {
 
   async sendTestNotification(kind: TestNotificationKind): Promise<NotificationSendSummary & {
     kind: TestNotificationKind;
-    current: BudgetSnapshot;
+    current: DailyBudgetSnapshot;
     tokenCount: number;
   }> {
     const current = this.snapshot();
@@ -206,22 +198,8 @@ export class BudgetNotificationService {
     };
   }
 
-  private snapshot(): BudgetSnapshot {
-    const budget = this.database.getDailyBudget();
-    const currentAllowance = Math.max(budget.initialAllowance + budget.adjustment, 0);
-    const spentAmount = netSpending(this.todayTransactions());
-    const remainingAmount = currentAllowance - spentAmount;
-    const usagePercent = currentAllowance > 0
-      ? Math.max(0, Math.round((spentAmount / currentAllowance) * 100))
-      : 100;
-
-    return {
-      currentAllowance,
-      spentAmount,
-      availableAmount: Math.max(remainingAmount, 0),
-      overspentAmount: Math.max(-remainingAmount, 0),
-      usagePercent
-    };
+  private snapshot(): DailyBudgetSnapshot {
+    return this.database.getDailyBudgetSnapshot();
   }
 
   private todayTransactions(): TransactionRecord[] {
@@ -243,7 +221,7 @@ export class BudgetNotificationService {
     previousChangeAt: string | undefined,
     latestChangeAt: string,
     previousAvailableAmount: number | undefined,
-    current: BudgetSnapshot
+    current: DailyBudgetSnapshot
   ): { minutes: number; amount: number } {
     const latestTime = Date.parse(latestChangeAt);
     const previousTime = previousChangeAt ? Date.parse(previousChangeAt) : latestTime;
@@ -296,16 +274,6 @@ export function kstDateKey(date: Date): string {
   const day = `${kst.getUTCDate()}`.padStart(2, "0");
 
   return `${year}-${month}-${day}`;
-}
-
-function netSpending(transactions: TransactionRecord[]): number {
-  return transactions.reduce((total, transaction) => {
-    if (transaction.kind === "expense") {
-      return total + transaction.amount;
-    }
-
-    return total - transaction.amount;
-  }, 0);
 }
 
 function todayRangeKst(): { start: Date; end: Date } {

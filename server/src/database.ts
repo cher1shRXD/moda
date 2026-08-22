@@ -7,6 +7,7 @@ import type {
   CreateGoalInput,
   CreateTransactionInput,
   DailyBudgetRecord,
+  DailyBudgetSnapshot,
   DeviceTokenRecord,
   GoalRecord,
   GoalStatus,
@@ -159,6 +160,25 @@ export class ModaDatabase {
     return this.updateDailyBudget({
       initialAllowance: Math.max(unallocatedBalance + todayNetSpending, 0)
     });
+  }
+
+  getDailyBudgetSnapshot(): DailyBudgetSnapshot {
+    const budget = this.getDailyBudget();
+    const currentAllowance = Math.max(budget.initialAllowance + budget.adjustment, 0);
+    const spentAmount = netSpending(this.listTransactions(todayRangeKst()));
+    const remainingAmount = currentAllowance - spentAmount;
+    const usagePercent = currentAllowance > 0
+      ? Math.min(100, Math.max(0, Math.round((spentAmount / currentAllowance) * 100)))
+      : 100;
+
+    return {
+      ...budget,
+      currentAllowance,
+      spentAmount,
+      availableAmount: Math.max(remainingAmount, 0),
+      overspentAmount: Math.max(-remainingAmount, 0),
+      usagePercent
+    };
   }
 
   listGoals(options: { includeArchived?: boolean } = {}): GoalRecord[] {
