@@ -26,6 +26,10 @@
 	<string>$(MODA_SERVER_API_KEY)</string>
 	<key>MODAServerBaseURL</key>
 	<string>$(MODA_SERVER_BASE_URL)</string>
+	<key>MODAServerHost</key>
+	<string>$(MODA_SERVER_HOST)</string>
+	<key>MODAServerScheme</key>
+	<string>$(MODA_SERVER_SCHEME)</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -13,37 +13,17 @@ struct FinanceState: Codable, Equatable {
         goals.filter { $0.status == .active }
     }
 
-    var primaryGoal: SavingsGoal {
-        activeGoals.first ?? SavingsGoal.sample
-    }
-
-    static var sample: FinanceState {
-        let calendar = Calendar.current
+    static var empty: FinanceState {
         let now = Date()
-        let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? now
+        let monthStart = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: now)) ?? now
 
         return FinanceState(
-            goals: [
-                SavingsGoal(
-                    title: "비상금",
-                    targetAmount: 5_000_000,
-                    dueDate: calendar.date(byAdding: .month, value: 6, to: now) ?? now
-                ),
-                SavingsGoal(
-                    title: "여행",
-                    targetAmount: 2_000_000,
-                    dueDate: calendar.date(byAdding: .month, value: 4, to: now) ?? now
-                )
-            ],
-            currentBalance: 3_180_000,
-            minimumBalance: 300_000,
-            today: DailyBudget(
-                initialAllowance: 32_000,
-                spentAmount: 18_400,
-                adjustment: 0
-            ),
-            transactions: Transaction.sampleTransactions(from: monthStart),
-            monthlySummaries: MonthlySummary.samples(from: monthStart),
+            goals: [],
+            currentBalance: 0,
+            minimumBalance: 0,
+            today: .empty,
+            transactions: [],
+            monthlySummaries: [],
             selectedMonth: monthStart
         )
     }
@@ -76,15 +56,15 @@ struct FinanceState: Codable, Equatable {
         } else if let goal = try container.decodeIfPresent(SavingsGoal.self, forKey: .goal) {
             self.goals = [goal]
         } else {
-            self.goals = [SavingsGoal.sample]
+            self.goals = []
         }
 
-        currentBalance = try container.decodeIfPresent(Int.self, forKey: .currentBalance) ?? FinanceState.sample.currentBalance
+        currentBalance = try container.decodeIfPresent(Int.self, forKey: .currentBalance) ?? FinanceState.empty.currentBalance
         minimumBalance = try container.decodeIfPresent(Int.self, forKey: .minimumBalance) ?? 0
-        today = try container.decode(DailyBudget.self, forKey: .today)
-        transactions = try container.decode([Transaction].self, forKey: .transactions)
-        monthlySummaries = try container.decode([MonthlySummary].self, forKey: .monthlySummaries)
-        selectedMonth = try container.decode(Date.self, forKey: .selectedMonth)
+        today = try container.decodeIfPresent(DailyBudget.self, forKey: .today) ?? .empty
+        transactions = try container.decodeIfPresent([Transaction].self, forKey: .transactions) ?? []
+        monthlySummaries = try container.decodeIfPresent([MonthlySummary].self, forKey: .monthlySummaries) ?? []
+        selectedMonth = try container.decodeIfPresent(Date.self, forKey: .selectedMonth) ?? FinanceState.empty.selectedMonth
     }
 
     func encode(to encoder: Encoder) throws {
@@ -112,10 +92,6 @@ struct SavingsGoal: Codable, Identifiable, Equatable {
     var dueDate: Date
     var status: Status
     var completedAt: Date?
-
-    static var sample: SavingsGoal {
-        SavingsGoal(title: "비상금", targetAmount: 5_000_000, dueDate: Date())
-    }
 
     init(id: UUID = UUID(), title: String, targetAmount: Int, dueDate: Date, status: Status = .active, completedAt: Date? = nil) {
         self.id = id
@@ -151,6 +127,8 @@ struct DailyBudget: Codable, Equatable {
     var spentAmount: Int
     var adjustment: Int
 
+    static let empty = DailyBudget(initialAllowance: 0, spentAmount: 0, adjustment: 0)
+
     var currentAllowance: Int {
         max(initialAllowance + adjustment, 0)
     }
@@ -176,31 +154,6 @@ struct Transaction: Codable, Identifiable, Equatable {
     var title: String
     var amount: Int
     var kind: Kind
-
-    static func sampleTransactions(from monthStart: Date) -> [Transaction] {
-        let calendar = Calendar.current
-        let expenses = [
-            (0, "점심", 9200),
-            (1, "커피", 5200),
-            (2, "교통", 1450),
-            (4, "마트", 28400),
-            (5, "저녁", 13200),
-            (8, "구독", 14900),
-            (10, "편의점", 7800),
-            (12, "약국", 6500),
-            (15, "선물", 42000),
-            (17, "점심", 11000),
-            (18, "카페", 4800)
-        ]
-
-        return expenses.compactMap { offset, title, amount in
-            guard let date = calendar.date(byAdding: .day, value: offset, to: monthStart) else {
-                return nil
-            }
-
-            return Transaction(id: UUID(), date: date, title: title, amount: amount, kind: .expense)
-        }
-    }
 }
 
 struct MonthlySummary: Codable, Identifiable, Equatable {
@@ -211,25 +164,5 @@ struct MonthlySummary: Codable, Identifiable, Equatable {
 
     var amountToCut: Int {
         max(spentAmount - targetAmount, 0)
-    }
-
-    static func samples(from currentMonth: Date) -> [MonthlySummary] {
-        let calendar = Calendar.current
-        let values = [
-            (-5, 920_000, 980_000),
-            (-4, 1_080_000, 980_000),
-            (-3, 970_000, 960_000),
-            (-2, 1_140_000, 960_000),
-            (-1, 1_020_000, 940_000),
-            (0, 742_000, 930_000)
-        ]
-
-        return values.compactMap { offset, spent, target in
-            guard let month = calendar.date(byAdding: .month, value: offset, to: currentMonth) else {
-                return nil
-            }
-
-            return MonthlySummary(month: month, spentAmount: spent, targetAmount: target)
-        }
     }
 }

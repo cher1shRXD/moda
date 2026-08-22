@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var selectedCalendarDay: Date?
     @State private var isMinimumBalanceSheetPresented = false
     @State private var hasAppeared = false
+    @State private var toastMessage: String?
+    @State private var toastID = UUID()
 
     var body: some View {
         let showsSkeleton = store.isLoadingRemoteData && !store.hasCompletedInitialFetch
@@ -80,8 +82,18 @@ struct ContentView: View {
                     selectedCalendarDay = nil
                     calendarDaySheet = nil
                 }
+                .onChange(of: store.remoteErrorMessage) { _, message in
+                    guard let message else { return }
+                    showToast(message)
+                }
                 .task {
                     await store.loadRemoteDataIfNeeded()
+                }
+                .refreshable {
+                    let refreshTask = Task {
+                        await store.reloadRemoteData()
+                    }
+                    await refreshTask.value
                 }
                 .sheet(item: $goalSheet) { sheet in
                     switch sheet {
@@ -156,6 +168,17 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
             .allowsHitTesting(false)
+
+            if let toastMessage {
+                VStack {
+                    Spacer()
+                    ToastView(message: toastMessage)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 34)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                .allowsHitTesting(false)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
@@ -174,6 +197,26 @@ struct ContentView: View {
             }
 
             Spacer()
+        }
+    }
+
+    private func showToast(_ message: String) {
+        let normalizedMessage = message.lowercased()
+        guard !normalizedMessage.contains("cancel"), !normalizedMessage.contains("취소") else {
+            return
+        }
+
+        let id = UUID()
+        toastID = id
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) {
+            toastMessage = message
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+            guard toastID == id else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                toastMessage = nil
+            }
         }
     }
 
@@ -373,13 +416,19 @@ struct ContentView: View {
             }
 
             VStack(spacing: 0) {
-                ForEach(store.state.activeGoals) { goal in
-                    goalRowButton(goal)
+                if store.state.activeGoals.isEmpty {
+                    EmptyGoalRow {
+                        goalSheet = .add
+                    }
+                } else {
+                    ForEach(store.state.activeGoals) { goal in
+                        goalRowButton(goal)
 
-                    if goal.id != store.state.activeGoals.last?.id {
-                        Divider()
-                            .overlay(AifiTheme.Color.stroke)
-                            .padding(.vertical, 14)
+                        if goal.id != store.state.activeGoals.last?.id {
+                            Divider()
+                                .overlay(AifiTheme.Color.stroke)
+                                .padding(.vertical, 14)
+                        }
                     }
                 }
             }
@@ -486,57 +535,64 @@ struct ContentView: View {
 
     private var monthlyGraph: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Chart(store.monthlySpendingSummaries) { summary in
-                AreaMark(
-                    x: .value("월", summary.month.shortMonthTitle),
-                    y: .value("소비", summary.spentAmount)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(AifiTheme.Color.chartFill)
+            ZStack {
+                Chart(store.monthlySpendingSummaries) { summary in
+                    AreaMark(
+                        x: .value("월", summary.month.shortMonthTitle),
+                        y: .value("소비", summary.spentAmount)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(AifiTheme.Color.chartFill)
 
-                LineMark(
-                    x: .value("월", summary.month.shortMonthTitle),
-                    y: .value("소비", summary.spentAmount)
-                )
-                .interpolationMethod(.catmullRom)
-                .lineStyle(StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                .foregroundStyle(AifiTheme.Color.purple)
+                    LineMark(
+                        x: .value("월", summary.month.shortMonthTitle),
+                        y: .value("소비", summary.spentAmount)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                    .foregroundStyle(AifiTheme.Color.purple)
 
-                PointMark(
-                    x: .value("월", summary.month.shortMonthTitle),
-                    y: .value("소비", summary.spentAmount)
-                )
-                .symbolSize(42)
-                .foregroundStyle(AifiTheme.Color.purple)
+                    PointMark(
+                        x: .value("월", summary.month.shortMonthTitle),
+                        y: .value("소비", summary.spentAmount)
+                    )
+                    .symbolSize(42)
+                    .foregroundStyle(AifiTheme.Color.purple)
+                }
+                .chartLegend(.hidden)
+                .chartXAxis {
+                    AxisMarks { value in
+                        AxisValueLabel {
+                            if let label = value.as(String.self) {
+                                Text(label)
+                                    .foregroundStyle(AifiTheme.Color.muted)
+                                    .font(AifiTheme.Font.micro)
+                            }
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading) { value in
+                        AxisValueLabel {
+                            if let amount = value.as(Int.self) {
+                                Text("\(amount / 10_000)")
+                                    .foregroundStyle(AifiTheme.Color.muted)
+                                    .font(AifiTheme.Font.micro)
+                            }
+                        }
+                    }
+                }
 
+                if store.monthlySpendingSummaries.isEmpty {
+                    EmptyGraphState()
+                }
             }
             .frame(height: 190)
             .padding(.top, 16)
-            .chartLegend(.hidden)
-            .chartXAxis {
-                AxisMarks { value in
-                    AxisValueLabel {
-                        if let label = value.as(String.self) {
-                            Text(label)
-                                .foregroundStyle(AifiTheme.Color.muted)
-                                .font(AifiTheme.Font.micro)
-                        }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading) { value in
-                    AxisValueLabel {
-                        if let amount = value.as(Int.self) {
-                            Text("\(amount / 10_000)")
-                                .foregroundStyle(AifiTheme.Color.muted)
-                                .font(AifiTheme.Font.micro)
-                        }
-                    }
-                }
-            }
 
-            comparisonSummary
+            if hasComparisonMetrics {
+                comparisonSummary
+            }
         }
     }
 
@@ -548,23 +604,37 @@ struct ContentView: View {
         let amountToCut = selected?.amountToCut ?? 0
 
         return HStack(spacing: 22) {
-            GraphMetric(
-                title: "직전 달 대비",
-                amount: abs(delta),
-                prefix: delta >= 0 ? "+" : "-",
-                tint: AifiTheme.Color.purple
-            )
+            if selected != nil, previous != nil {
+                GraphMetric(
+                    title: "직전 달 대비",
+                    amount: abs(delta),
+                    prefix: delta >= 0 ? "+" : "-",
+                    tint: AifiTheme.Color.purple
+                )
+            }
 
-            Rectangle()
-                .fill(AifiTheme.Color.stroke)
-                .frame(width: 1, height: 34)
+            if amountToCut > 0 {
+                if selected != nil, previous != nil {
+                    Rectangle()
+                        .fill(AifiTheme.Color.stroke)
+                        .frame(width: 1, height: 34)
+                }
 
-            GraphMetric(
-                title: "줄일 금액",
-                amount: amountToCut,
-                tint: AifiTheme.Color.purple
-            )
+                GraphMetric(
+                    title: "줄일 금액",
+                    amount: amountToCut,
+                    tint: AifiTheme.Color.purple
+                )
+            }
         }
+    }
+
+    private var hasComparisonMetrics: Bool {
+        let selected = store.summary(for: store.state.selectedMonth)
+        let previousMonth = Calendar.current.date(byAdding: .month, value: -1, to: store.state.selectedMonth)
+        let previous = previousMonth.flatMap { store.summary(for: $0) }
+
+        return (selected != nil && previous != nil) || (selected?.amountToCut ?? 0) > 0
     }
 
     private func goalRowButton(_ goal: SavingsGoal) -> some View {
@@ -657,6 +727,37 @@ private struct GoalRow: View {
             .foregroundStyle(AifiTheme.Color.muted)
         }
         .padding(.vertical, 2)
+    }
+}
+
+private struct EmptyGoalRow: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        Button(action: onAdd) {
+            HStack(spacing: 12) {
+                Image(systemName: "plus")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(AifiTheme.Color.purple)
+                    .frame(width: 28, height: 28)
+                    .background(AifiTheme.Color.purple.opacity(0.16), in: Circle())
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("목표 추가")
+                        .font(AifiTheme.Font.goalTitle)
+                        .foregroundStyle(AifiTheme.Color.text)
+
+                    Text("아직 등록된 목표가 없어요.")
+                        .font(AifiTheme.Font.goalMeta)
+                        .foregroundStyle(AifiTheme.Color.muted)
+                }
+
+                Spacer()
+            }
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -860,6 +961,54 @@ private struct DailyAmountRow: View {
             CountUpText(value: amount)
                 .font(AifiTheme.Font.captionStrong)
                 .foregroundStyle(AifiTheme.Color.text)
+        }
+    }
+}
+
+private struct ToastView: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(AifiTheme.Color.danger)
+
+            Text(message)
+                .font(AifiTheme.Font.captionStrong)
+                .foregroundStyle(AifiTheme.Color.text)
+                .lineLimit(2)
+                .minimumScaleFactor(0.84)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(AifiTheme.Color.stroke)
+        }
+        .shadow(color: .black.opacity(0.26), radius: 18, y: 10)
+    }
+}
+
+private struct EmptyGraphState: View {
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "chart.xyaxis.line")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(AifiTheme.Color.purple.opacity(0.82))
+
+            Text("아직 흐름 없음")
+                .font(AifiTheme.Font.captionStrong)
+                .foregroundStyle(AifiTheme.Color.text)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AifiTheme.Color.panelSoft.opacity(0.42), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(AifiTheme.Color.stroke)
         }
     }
 }

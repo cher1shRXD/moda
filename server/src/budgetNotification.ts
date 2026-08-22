@@ -19,6 +19,20 @@ type NotificationCheckResult = {
   failures: Array<{ token: string; reason?: string; status?: number }>;
 };
 
+export type TestNotificationKind = "budgetChanged" | "daily";
+
+type NotificationSendSummary = {
+  sent: number;
+  skipped: number;
+  failures: Array<{ token: string; reason?: string; status?: number }>;
+};
+
+type NotificationPayload = {
+  title: string;
+  body: string;
+  data?: Record<string, string | number | boolean | null>;
+};
+
 const LAST_AVAILABLE_AMOUNT_KEY = "budget:last_available_amount";
 const DAILY_SUMMARY_SENT_DATE_KEY = "budget:daily_summary_sent_date";
 
@@ -133,6 +147,50 @@ export class BudgetNotificationService {
     };
   }
 
+  async sendTestNotification(kind: TestNotificationKind): Promise<NotificationSendSummary & {
+    kind: TestNotificationKind;
+    current: BudgetSnapshot;
+    tokenCount: number;
+  }> {
+    const current = this.snapshot();
+    const tokenCount = this.database.listDeviceTokens().length;
+    const payload: NotificationPayload = kind === "budgetChanged"
+      ? {
+          title: "오늘 예산이 바뀌었어요",
+          body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+          data: {
+            kind: "budget_changed_test",
+            availableAmount: current.availableAmount,
+            overspentAmount: current.overspentAmount,
+            currentAllowance: current.currentAllowance,
+            spentAmount: current.spentAmount,
+            usagePercent: current.usagePercent
+          }
+        }
+      : {
+          title: "오늘 사용할 수 있는 돈",
+          body: `오늘 사용 가능 ${won(current.availableAmount)} · 오늘 예산 대비 ${current.usagePercent}% 사용`,
+          data: {
+            kind: "daily_budget_summary_test",
+            date: kstDateKey(new Date()),
+            availableAmount: current.availableAmount,
+            overspentAmount: current.overspentAmount,
+            currentAllowance: current.currentAllowance,
+            spentAmount: current.spentAmount,
+            usagePercent: current.usagePercent
+          }
+        };
+
+    const summary = await this.sendToAll(payload);
+
+    return {
+      kind,
+      current,
+      tokenCount,
+      ...summary
+    };
+  }
+
   private snapshot(): BudgetSnapshot {
     const budget = this.database.getDailyBudget();
     const currentAllowance = Math.max(budget.initialAllowance + budget.adjustment, 0);
@@ -157,6 +215,24 @@ export class BudgetNotificationService {
       from: start.toISOString(),
       to: end.toISOString()
     });
+  }
+
+  private async sendToAll(payload: NotificationPayload): Promise<NotificationSendSummary> {
+    const results = await Promise.all(
+      this.database.listDeviceTokens().map((token) => this.apnsClient.send(token, payload))
+    );
+
+    return {
+      sent: results.filter((result) => result.sent).length,
+      skipped: results.filter((result) => !result.sent && result.reason === "APNs is not configured.").length,
+      failures: results
+        .filter((result) => !result.sent && result.reason !== "APNs is not configured.")
+        .map((result) => ({
+          token: result.token,
+          reason: result.reason,
+          status: result.status
+        }))
+    };
   }
 }
 

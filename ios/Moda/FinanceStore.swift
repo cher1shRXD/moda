@@ -6,6 +6,8 @@ final class FinanceStore: ObservableObject {
     @Published private(set) var isLoadingRemoteData = false
     @Published private(set) var hasCompletedInitialFetch = false
     @Published private(set) var remoteErrorMessage: String?
+    @Published private(set) var lastRemoteSyncAt: Date?
+    @Published private(set) var pendingRemoteChangeCount = 0
 
     private let fileName = "moda-finance-state.json"
     private let encoder: JSONEncoder
@@ -21,7 +23,7 @@ final class FinanceStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         self.backend = backend
 
-        state = FinanceState.sample
+        state = FinanceState.empty
         load()
     }
 
@@ -186,18 +188,20 @@ final class FinanceStore: ObservableObject {
     }
 
     var monthlySpendingSummaries: [MonthlySummary] {
-        state.monthlySummaries.map { summary in
-            let netSpentAmount = finalSpending(in: summary.month)
-            guard hasTransactions(in: summary.month) else {
-                return summary
-            }
+        let calendar = Calendar.current
+        let months = Set(state.transactions.map {
+            calendar.date(from: calendar.dateComponents([.year, .month], from: $0.date)) ?? $0.date
+        })
 
-            return MonthlySummary(
-                month: summary.month,
-                spentAmount: netSpentAmount,
-                targetAmount: summary.targetAmount
-            )
-        }
+        return months
+            .sorted()
+            .map { month in
+                MonthlySummary(
+                    month: month,
+                    spentAmount: finalSpending(in: month),
+                    targetAmount: monthlyTargetAmount(for: month)
+                )
+            }
     }
 
     func summary(for month: Date) -> MonthlySummary? {
@@ -214,19 +218,33 @@ final class FinanceStore: ObservableObject {
     }
 
     func reloadRemoteData() async {
+        guard pendingRemoteChangeCount == 0 else {
+            remoteErrorMessage = "서버에 반영되지 않은 변경사항이 있어요."
+            hasCompletedInitialFetch = true
+            return
+        }
+
         isLoadingRemoteData = true
         remoteErrorMessage = nil
+        defer {
+            isLoadingRemoteData = false
+            hasCompletedInitialFetch = true
+        }
 
         do {
             let snapshot = try await backend.fetchSnapshot()
             apply(snapshot: snapshot)
+            lastRemoteSyncAt = Date()
+            pendingRemoteChangeCount = 0
             save()
+        } catch where error.isCancellation {
         } catch {
             remoteErrorMessage = error.localizedDescription
         }
+    }
 
-        isLoadingRemoteData = false
-        hasCompletedInitialFetch = true
+    func dismissRemoteError() {
+        remoteErrorMessage = nil
     }
 
     private func finalSpending(in month: Date) -> Int {
@@ -250,6 +268,13 @@ final class FinanceStore: ObservableObject {
         return state.transactions.contains {
             calendar.isDate($0.date, equalTo: month, toGranularity: .month)
         }
+    }
+
+    private func monthlyTargetAmount(for month: Date) -> Int {
+        let calendar = Calendar.current
+        return state.monthlySummaries.first {
+            calendar.isDate($0.month, equalTo: month, toGranularity: .month)
+        }?.targetAmount ?? 0
     }
 
     private var goalBalanceAllocations: [SavingsGoal.ID: Int] {
@@ -326,8 +351,12 @@ final class FinanceStore: ObservableObject {
     private func runRemoteMutation(_ operation: () async throws -> Void) async {
         do {
             try await operation()
+            lastRemoteSyncAt = Date()
+            pendingRemoteChangeCount = max(pendingRemoteChangeCount - 1, 0)
             remoteErrorMessage = nil
+        } catch where error.isCancellation {
         } catch {
+            pendingRemoteChangeCount += 1
             remoteErrorMessage = error.localizedDescription
         }
     }
@@ -387,7 +416,7 @@ final class FinanceStore: ObservableObject {
         do {
             state = try decoder.decode(FinanceState.self, from: data)
         } catch {
-            state = .sample
+            state = .empty
             save()
         }
     }
@@ -408,6 +437,26 @@ final class FinanceStore: ObservableObject {
     private var storeURL: URL {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return directory.appendingPathComponent(fileName)
+    }
+}
+
+private extension Error {
+    var isCancellation: Bool {
+        if self is CancellationError {
+            return true
+        }
+
+        if let urlError = self as? URLError, urlError.code == .cancelled {
+            return true
+        }
+
+        let nsError = self as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+            return true
+        }
+
+        let description = localizedDescription.lowercased()
+        return description.contains("cancel") || description.contains("취소")
     }
 }
 

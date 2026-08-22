@@ -1,5 +1,7 @@
-MODA_SERVER_BASE_URL = http:/$()/127.0.0.1:8080
-MODA_SERVER_API_KEY = ehdgoanfrhkqorentksdlakfmrhekfgehfhrgksmsladlqhdngktkdnflskfkakstpanrndghktkacjsflghkfurkedtkseogkstkfkaeogksdmfhrlflqhwjsgktp
+MODA_SERVER_SCHEME = https
+MODA_SERVER_HOST = 121.177.220.80.sslip.io
+MODA_SERVER_BASE_URL = $(MODA_SERVER_SCHEME)://$(MODA_SERVER_HOST)
+MODA_API_KEY =
 
 #include? "ModaSecrets.xcconfig"
 

@@ -1,6 +1,8 @@
 import Foundation
 
 struct BackendConfiguration {
+    private static let fallbackBaseURL = URL(string: "https://121.177.220.80.sslip.io")!
+
     var baseURL: URL
     var apiKey: String
 
@@ -8,17 +10,48 @@ struct BackendConfiguration {
         let defaults = UserDefaults.standard
         let bundle = Bundle.main
 
-        let baseURLString = defaults.string(forKey: "MODAServerBaseURL")
-            ?? bundle.object(forInfoDictionaryKey: "MODAServerBaseURL") as? String
-            ?? "http://127.0.0.1:8080"
-        let apiKey = defaults.string(forKey: "MODAServerAPIKey")
-            ?? bundle.object(forInfoDictionaryKey: "MODAServerAPIKey") as? String
-            ?? ""
+        let apiKey = sanitizedSetting(
+            defaults.string(forKey: "MODAServerAPIKey")
+                ?? bundle.object(forInfoDictionaryKey: "MODAServerAPIKey") as? String
+        ) ?? ""
 
         return BackendConfiguration(
-            baseURL: URL(string: baseURLString) ?? URL(string: "http://127.0.0.1:8080")!,
+            baseURL: configuredBaseURL(defaults: defaults, bundle: bundle),
             apiKey: apiKey
         )
+    }
+
+    private static func configuredBaseURL(defaults: UserDefaults, bundle: Bundle) -> URL {
+        if let override = sanitizedSetting(defaults.string(forKey: "MODAServerBaseURL")),
+           let url = URL(string: override),
+           url.scheme != nil,
+           url.host != nil {
+            return url
+        }
+
+        let bundleBaseURL = sanitizedSetting(bundle.object(forInfoDictionaryKey: "MODAServerBaseURL") as? String)
+        if let bundleBaseURL,
+           let url = URL(string: bundleBaseURL),
+           url.scheme != nil,
+           url.host != nil {
+            return url
+        }
+
+        let scheme = sanitizedSetting(bundle.object(forInfoDictionaryKey: "MODAServerScheme") as? String) ?? "https"
+        let host = sanitizedSetting(bundle.object(forInfoDictionaryKey: "MODAServerHost") as? String)
+        if let host,
+           let url = URL(string: "\(scheme)://\(host)") {
+            return url
+        }
+
+        return fallbackBaseURL
+    }
+
+    private static func sanitizedSetting(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("$(") else { return nil }
+        return trimmed
     }
 }
 
@@ -33,7 +66,7 @@ struct BackendClient {
         self.session = session
 
         decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom(Self.decodeISO8601Date)
 
         encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -107,6 +140,8 @@ struct BackendClient {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
+        request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         guard !configuration.apiKey.isEmpty else {
             throw BackendClientError.missingAPIKey
         }
@@ -124,17 +159,44 @@ struct BackendClient {
             throw BackendClientError.invalidResponse
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            let message = String(data: data, encoding: .utf8)
+            let message = (try? decoder.decode(BackendErrorResponse.self, from: data).message)
+                ?? String(data: data, encoding: .utf8)
             throw BackendClientError.requestFailed(statusCode: httpResponse.statusCode, message: message)
         }
 
-        return try decoder.decode(Response.self, from: data)
+        do {
+            return try decoder.decode(Response.self, from: data)
+        } catch {
+            throw BackendClientError.decodingFailed
+        }
+    }
+
+    private static func decodeISO8601Date(from decoder: Decoder) throws -> Date {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let standardFormatter = ISO8601DateFormatter()
+        standardFormatter.formatOptions = [.withInternetDateTime]
+
+        if let date = fractionalFormatter.date(from: value)
+            ?? standardFormatter.date(from: value) {
+            return date
+        }
+
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Invalid ISO-8601 date: \(value)"
+        )
     }
 }
 
 enum BackendClientError: LocalizedError {
     case missingAPIKey
     case invalidResponse
+    case decodingFailed
     case requestFailed(statusCode: Int, message: String?)
 
     var errorDescription: String? {
@@ -143,10 +205,16 @@ enum BackendClientError: LocalizedError {
             return "앱 서버 API 키가 설정되지 않았어요."
         case .invalidResponse:
             return "서버 응답을 읽을 수 없어요."
+        case .decodingFailed:
+            return "서버 데이터 형식이 앱과 맞지 않아요."
         case .requestFailed(let statusCode, let message):
             return "서버 요청 실패 (\(statusCode)) \(message ?? "")"
         }
     }
+}
+
+private struct BackendErrorResponse: Decodable {
+    let message: String?
 }
 
 struct BackendSnapshot: Decodable {

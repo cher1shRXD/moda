@@ -19,6 +19,19 @@ const app = buildApp({ config, database });
 app.post("/sync/bankapi", async () => bankApiSync.pullOnce());
 app.post("/notifications/budget/check", async () => budgetNotification.checkAndNotify());
 app.post("/notifications/budget/daily", async () => budgetNotification.sendDailySummary());
+app.post("/notifications/test", async (request, reply) => {
+  const body = request.body as { kind?: unknown } | undefined;
+  const kind = body?.kind;
+
+  if (kind !== "budgetChanged" && kind !== "daily") {
+    return reply.code(400).send({
+      error: "Bad Request",
+      message: "kind must be budgetChanged or daily."
+    });
+  }
+
+  return budgetNotification.sendTestNotification(kind);
+});
 
 bankApiSync.start();
 dailyBudgetScheduler.start();
