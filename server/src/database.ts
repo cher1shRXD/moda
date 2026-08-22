@@ -53,6 +53,7 @@ type DeviceTokenRow = {
 };
 
 type DailyBudgetRow = {
+  monthly_allowance: number;
   initial_allowance: number;
   adjustment: number;
   updated_at: string;
@@ -116,23 +117,24 @@ export class ModaDatabase {
 
   getDailyBudget(): DailyBudgetRecord {
     const row = this.db
-      .prepare("SELECT initial_allowance, adjustment, updated_at FROM daily_budget_state WHERE id = 1")
+      .prepare("SELECT monthly_allowance, initial_allowance, adjustment, updated_at FROM daily_budget_state WHERE id = 1")
       .get() as DailyBudgetRow | undefined;
 
     if (!row) {
       const now = new Date().toISOString();
       this.db
-        .prepare("INSERT INTO daily_budget_state (id, initial_allowance, adjustment, updated_at) VALUES (1, 0, 0, ?)")
+        .prepare("INSERT INTO daily_budget_state (id, monthly_allowance, initial_allowance, adjustment, updated_at) VALUES (1, 0, 0, 0, ?)")
         .run(now);
-      return { initialAllowance: 0, adjustment: 0, updatedAt: now };
+      return { monthlyAllowance: 0, initialAllowance: 0, adjustment: 0, updatedAt: now };
     }
 
     return mapDailyBudget(row);
   }
 
-  updateDailyBudget(input: { initialAllowance?: number; adjustment?: number }): DailyBudgetRecord {
+  updateDailyBudget(input: { monthlyAllowance?: number; initialAllowance?: number; adjustment?: number }): DailyBudgetRecord {
     const current = this.getDailyBudget();
     const next = {
+      monthlyAllowance: input.monthlyAllowance ?? current.monthlyAllowance,
       initialAllowance: input.initialAllowance ?? current.initialAllowance,
       adjustment: input.adjustment ?? current.adjustment,
       updatedAt: new Date().toISOString()
@@ -141,31 +143,31 @@ export class ModaDatabase {
     this.db
       .prepare(
         `UPDATE daily_budget_state
-         SET initial_allowance = ?, adjustment = ?, updated_at = ?
+         SET monthly_allowance = ?, initial_allowance = ?, adjustment = ?, updated_at = ?
          WHERE id = 1`
       )
-      .run(next.initialAllowance, next.adjustment, next.updatedAt);
+      .run(next.monthlyAllowance, next.initialAllowance, next.adjustment, next.updatedAt);
 
     return next;
   }
 
   recalculateDailyBudgetBaseline(): DailyBudgetRecord {
-    const balance = this.getBalance();
-    const unallocatedBalance = this.availableBudgetAmount(balance);
-    const todayNetSpending = netSpending(this.listTransactions(todayRangeKst()));
+    const budget = this.getDailyBudget();
+    const spentBeforeToday = Math.max(netSpending(this.listTransactions(monthBeforeTodayRangeKst())), 0);
+    const remainingMonthlyAllowance = Math.max(budget.monthlyAllowance - spentBeforeToday, 0);
+    const dailyAllowance = Math.floor(remainingMonthlyAllowance / remainingDaysInKstMonth());
 
     return this.updateDailyBudget({
-      initialAllowance: Math.max(unallocatedBalance + Math.max(todayNetSpending, 0), 0)
+      initialAllowance: dailyAllowance
     });
   }
 
   getDailyBudgetSnapshot(): DailyBudgetSnapshot {
     const budget = this.getDailyBudget();
-    const balance = this.getBalance();
     const spentAmount = netSpending(this.listTransactions(todayRangeKst()));
     const normalizedSpentAmount = Math.max(spentAmount, 0);
-    const availableAmount = Math.max(this.availableBudgetAmount(balance) + budget.adjustment, 0);
-    const currentAllowance = Math.max(availableAmount + normalizedSpentAmount, 0);
+    const currentAllowance = Math.max(budget.initialAllowance + budget.adjustment, 0);
+    const availableAmount = Math.max(currentAllowance - normalizedSpentAmount, 0);
     const usagePercent = currentAllowance > 0
       ? Math.min(100, Math.max(0, Math.round((normalizedSpentAmount / currentAllowance) * 100)))
       : 100;
@@ -178,13 +180,6 @@ export class ModaDatabase {
       overspentAmount: Math.max(normalizedSpentAmount - currentAllowance, 0),
       usagePercent
     };
-  }
-
-  private availableBudgetAmount(balance: BalanceRecord): number {
-    const activeGoalTargetAmount = this.listGoals()
-      .reduce((total, goal) => total + goal.targetAmount, 0);
-
-    return Math.max(balance.currentBalance - balance.minimumBalance - activeGoalTargetAmount, 0);
   }
 
   listGoals(options: { includeArchived?: boolean } = {}): GoalRecord[] {
@@ -411,6 +406,7 @@ export class ModaDatabase {
 
       CREATE TABLE IF NOT EXISTS daily_budget_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
+        monthly_allowance INTEGER NOT NULL DEFAULT 0 CHECK (monthly_allowance >= 0),
         initial_allowance INTEGER NOT NULL DEFAULT 0 CHECK (initial_allowance >= 0),
         adjustment INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL
@@ -464,6 +460,7 @@ export class ModaDatabase {
 
     this.addColumnIfMissing("goals", "status", "TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'used', 'released'))");
     this.addColumnIfMissing("goals", "completed_at", "TEXT");
+    this.addColumnIfMissing("daily_budget_state", "monthly_allowance", "INTEGER NOT NULL DEFAULT 0 CHECK (monthly_allowance >= 0)");
   }
 
   private addColumnIfMissing(table: string, column: string, definition: string): void {
@@ -484,6 +481,7 @@ function mapBalance(row: BalanceRow): BalanceRecord {
 
 function mapDailyBudget(row: DailyBudgetRow): DailyBudgetRecord {
   return {
+    monthlyAllowance: row.monthly_allowance,
     initialAllowance: row.initial_allowance,
     adjustment: row.adjustment,
     updatedAt: row.updated_at
@@ -539,6 +537,32 @@ function todayRangeKst(): { from: string; to: string } {
     from: start.toISOString(),
     to: end.toISOString()
   };
+}
+
+function monthBeforeTodayRangeKst(): { from: string; to: string } {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = kst.getUTCFullYear();
+  const month = kst.getUTCMonth();
+  const day = kst.getUTCDate();
+  const start = new Date(Date.UTC(year, month, 1) - 9 * 60 * 60 * 1000);
+  const end = new Date(Date.UTC(year, month, day) - 9 * 60 * 60 * 1000 - 1);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString()
+  };
+}
+
+function remainingDaysInKstMonth(): number {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = kst.getUTCFullYear();
+  const month = kst.getUTCMonth();
+  const day = kst.getUTCDate();
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+  return Math.max(lastDay - day + 1, 1);
 }
 
 function mapDeviceToken(row: DeviceTokenRow): DeviceTokenRecord {

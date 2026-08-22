@@ -38,6 +38,7 @@ export type DeviceTokenRecord = {
 };
 
 export type DailyBudgetRecord = {
+  monthlyAllowance: number;
   initialAllowance: number;
   adjustment: number;
   updatedAt: string;

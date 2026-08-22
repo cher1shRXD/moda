@@ -84,6 +84,9 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   app.put("/today", async (request) => {
     const body = asObject(request.body);
     database.updateDailyBudget({
+      monthlyAllowance: body.monthlyAllowance === undefined
+        ? undefined
+        : parseInteger(body.monthlyAllowance, "monthlyAllowance"),
       initialAllowance: body.initialAllowance === undefined
         ? undefined
         : parseInteger(body.initialAllowance, "initialAllowance"),
@@ -91,6 +94,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
         ? undefined
         : parseSignedInteger(body.adjustment, "adjustment")
     });
+    database.recalculateDailyBudgetBaseline();
     return database.getDailyBudgetSnapshot();
   });
 
