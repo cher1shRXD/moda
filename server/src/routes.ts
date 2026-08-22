@@ -32,9 +32,11 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
 
   app.get("/snapshot", async (request) => {
     const query = request.query as { from?: string; to?: string };
+    const today = database.recalculateDailyBudgetBaseline();
+
     return {
       balance: database.getBalance(),
-      today: database.getDailyBudget(),
+      today,
       goals: database.listGoals(),
       transactions: database.listTransactions({
         from: query.from ? parseIsoDate(query.from, "from") : undefined,
@@ -47,7 +49,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
 
   app.put("/balance", async (request) => {
     const body = asObject(request.body);
-    return database.updateBalance({
+    const balance = database.updateBalance({
       currentBalance: body.currentBalance === undefined
         ? undefined
         : parseInteger(body.currentBalance, "currentBalance"),
@@ -55,20 +57,26 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
         ? undefined
         : parseInteger(body.minimumBalance, "minimumBalance")
     });
+    database.recalculateDailyBudgetBaseline();
+    return balance;
   });
 
   app.put("/balance/current", async (request) => {
     const body = asObject(request.body);
-    return database.updateBalance({
+    const balance = database.updateBalance({
       currentBalance: parseInteger(body.currentBalance, "currentBalance")
     });
+    database.recalculateDailyBudgetBaseline();
+    return balance;
   });
 
   app.put("/balance/minimum", async (request) => {
     const body = asObject(request.body);
-    return database.updateBalance({
+    const balance = database.updateBalance({
       minimumBalance: parseInteger(body.minimumBalance, "minimumBalance")
     });
+    database.recalculateDailyBudgetBaseline();
+    return balance;
   });
 
   app.get("/today", async () => database.getDailyBudget());
@@ -98,6 +106,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       ...input,
       id: randomUUID()
     });
+    database.recalculateDailyBudgetBaseline();
 
     return reply.code(201).send(goal);
   });
@@ -109,6 +118,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Goal not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return goal;
   });
 
@@ -119,6 +129,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Goal not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return goal;
   });
 
@@ -129,6 +140,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Goal not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return goal;
   });
 
@@ -149,6 +161,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Goal not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return reply.code(204).send();
   });
 
@@ -169,6 +182,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
 
   app.post("/transactions", async (request, reply) => {
     const transaction = database.createTransaction(parseCreateTransaction(request.body));
+    database.recalculateDailyBudgetBaseline();
     return reply.code(201).send(transaction);
   });
 
@@ -179,6 +193,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Transaction not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return transaction;
   });
 
@@ -199,6 +214,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(404).send({ error: "Not Found", message: "Transaction not found." });
     }
 
+    database.recalculateDailyBudgetBaseline();
     return reply.code(204).send();
   });
 

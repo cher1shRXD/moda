@@ -148,6 +148,19 @@ export class ModaDatabase {
     return next;
   }
 
+  recalculateDailyBudgetBaseline(): DailyBudgetRecord {
+    const balance = this.getBalance();
+    const spendableBalance = Math.max(balance.currentBalance - balance.minimumBalance, 0);
+    const activeGoalTargetAmount = this.listGoals()
+      .reduce((total, goal) => total + goal.targetAmount, 0);
+    const unallocatedBalance = Math.max(spendableBalance - activeGoalTargetAmount, 0);
+    const todayNetSpending = netSpending(this.listTransactions(todayRangeKst()));
+
+    return this.updateDailyBudget({
+      initialAllowance: Math.max(unallocatedBalance + todayNetSpending, 0)
+    });
+  }
+
   listGoals(options: { includeArchived?: boolean } = {}): GoalRecord[] {
     const where = options.includeArchived ? "" : "WHERE status = 'active'";
     const rows = this.db
@@ -474,6 +487,31 @@ function mapTransaction(row: TransactionRow): TransactionRecord {
     kind: row.kind,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  };
+}
+
+function netSpending(transactions: TransactionRecord[]): number {
+  return transactions.reduce((total, transaction) => {
+    if (transaction.kind === "expense") {
+      return total + transaction.amount;
+    }
+
+    return total - transaction.amount;
+  }, 0);
+}
+
+function todayRangeKst(): { from: string; to: string } {
+  const now = new Date();
+  const kst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = kst.getUTCFullYear();
+  const month = kst.getUTCMonth();
+  const day = kst.getUTCDate();
+  const start = new Date(Date.UTC(year, month, day) - 9 * 60 * 60 * 1000);
+  const end = new Date(Date.UTC(year, month, day + 1) - 9 * 60 * 60 * 1000 - 1);
+
+  return {
+    from: start.toISOString(),
+    to: end.toISOString()
   };
 }
 

@@ -117,6 +117,7 @@ export class BankApiSyncService {
     if (balance !== undefined) {
       this.database.updateBalance({ currentBalance: balance });
     }
+    this.database.recalculateDailyBudgetBaseline();
 
     this.database.setSyncCursor("bankapi:last_success", new Date().toISOString());
     await this.onPulled?.();
